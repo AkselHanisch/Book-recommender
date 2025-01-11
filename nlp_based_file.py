@@ -9,7 +9,7 @@ import numpy as np
 
 def get_nlp_recommendations_by_user_program(user_id, n):
     # Load datasets
-    df_books = pd.read_csv('merged_books.csv')
+    df_books = pd.read_csv('Data/merged_books.csv')
     df_ratings = pd.read_csv('Data/Ratings.csv')
 
     # Filter the ratings dataset to include only the books present in merged_books.csv
@@ -19,7 +19,7 @@ def get_nlp_recommendations_by_user_program(user_id, n):
     filtered_ratings.to_csv('filtered_ratings.csv', index=False)
 
     # Reload the books dataset
-    df_books = pd.read_csv('merged_books.csv')
+    df_books = pd.read_csv('Data/merged_books.csv')
 
     # Compute TF-IDF matrix for content-based filtering
     tfidf_vectorizer = TfidfVectorizer(stop_words='english')

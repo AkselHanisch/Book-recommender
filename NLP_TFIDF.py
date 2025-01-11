@@ -4,7 +4,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
 # Load the merged books dataset
-merged_book_df = pd.read_csv('merged_books.csv')
+merged_book_df = pd.read_csv('Data/merged_books.csv')
 
 # Load the cosine similarity matrix from the file
 cosine_sim = np.load('cosine_similarity_matrix.npy')
