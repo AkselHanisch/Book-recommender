@@ -1,0 +1,18 @@
+files needed: 
+templates/
+static/
+venv/
+app.py
+content_based_file.py
+user_based_file.py
+nlp_based_file.py
+make_matrix.py
+NLP_TFIDF.py
+
+In the app.py are the main functions to search books to rate them, receive recommendations, etc
+In make_matrix.py makes the npy matrixes
+
+
+How to run: python app.py
+Then go to the browser to the link http://127.0.0.1:5000
+Hit next -> the user-form -> complete with the name, location, age -> in the background a new user id will be generated and added in the Users.csv -> book selection, where a user chooses the books he/she read click on submit -> rate books where the previous selected books are rated by the user and submitted -> the recommendation part HERE is the problem: the functions need to be changed
