@@ -1,10 +1,6 @@
 import pandas as pd
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 import os
-import matplotlib.pyplot as plt
-import random
-import scipy
-import math
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import csr_matrix
 from sklearn.neighbors import NearestNeighbors
@@ -16,11 +12,7 @@ from nltk.corpus import stopwords
 from sklearn.preprocessing import normalize
 nltk.download('stopwords')
 from sklearn.feature_extraction.text import TfidfVectorizer
-from content_based_file import get_content_based_recommendations_by_user
-from user_based_file import get_user_based_recommendations_by_user
-from nlp_based_file import get_nlp_recommendations_by_user_program
-from NLP_TFIDF import get_recommendations
-from make_matrix import generate_cosine_similarity_matrices
+from methods import recompute_user_similarity, get_user_based_recommendations_by_user, generate_cosine_similarity_matrices, get_content_based_recommendations_by_user, get_nlp_recommendations_by_user_program, scale_scores
 
 app = Flask(__name__)
 
@@ -31,20 +23,18 @@ def ensure_matrices_exist():
         generate_cosine_similarity_matrices()
 
 dtype = {'Column-Name': str}  # replace 'Column-Name' with the actual name of the column
-filtered_books = pd.read_csv('data/filtered_books.csv', dtype=dtype)
-users = pd.read_csv('data/Users.csv', dtype=dtype)
-ratings = pd.read_csv('data/Ratings.csv')
+filtered_books = pd.read_csv('data/filtered_books.csv', dtype=dtype).head(10000)  # Select first 10k rows
+users = pd.read_csv('data/Users.csv', dtype=dtype).head(10000)  # Select first 10k rows
+ratings = pd.read_csv('data/Ratings.csv', dtype=dtype).sample(n=10000, random_state=42)
 ensure_matrices_exist()
 selected_books = []
 
-
-users_csv_path = 'data/Users.csv'
 
 # Function to generate the next numeric user ID
 def generate_user_id():
     try:
         # Load the existing users
-        users_df = pd.read_csv(users_csv_path)
+        users_df = pd.read_csv('data/Users.csv')
 
         # Get the last numeric user ID from the CSV (if any)
         last_user_id = users_df['User-ID'].max() if not users_df.empty else 0
@@ -55,7 +45,7 @@ def generate_user_id():
         # If the file doesn't exist, start from ID 1
         new_user_id = 1
     
-    return new_user_id
+    return int(new_user_id)
 
 def save_new_user(user_name, user_location, user_age):
     # Generate a new user ID
@@ -66,7 +56,7 @@ def save_new_user(user_name, user_location, user_age):
     
     try:
         # Load existing users
-        users_df = pd.read_csv(users_csv_path)
+        users_df = pd.read_csv('data/Users.csv')
     except FileNotFoundError:
         # If file does not exist, create a new DataFrame
         users_df = pd.DataFrame(columns=['User-ID', 'Location', 'Age', 'User-Name'])
@@ -75,7 +65,7 @@ def save_new_user(user_name, user_location, user_age):
     users_df = pd.concat([users_df, new_user], ignore_index=True)
 
     # Save the updated users data back to the CSV
-    users_df.to_csv(users_csv_path, index=False)
+    users_df.to_csv('data/Users.csv', index=False)
 
     # Return the new user ID
     return new_user_id
@@ -118,15 +108,13 @@ def book_selection(user_id):
 
 @app.route('/rate_books/<user_id>', methods=['GET', 'POST'])
 def rate_books(user_id):
-    global selected_books  # Access the global list
+    global selected_books
     books_to_rate = selected_books
     current_books = []
     
-    # Find the books based on ISBN
     for isbn in books_to_rate:
         book = filtered_books[filtered_books['ISBN'] == isbn]
         if not book.empty:
-            # Add the relevant book information to the current_books list
             current_books.append({
                 'ISBN': book['ISBN'].values[0],
                 'Book-Title': book['Book-Title'].values[0],
@@ -134,12 +122,29 @@ def rate_books(user_id):
                 'Image-URL-S': book['Image-URL-S'].values[0]
             })
     
-    # After displaying the books, wait for the user to rate them and submit
     if request.method == 'POST':
-        ratings_for_books = request.form.getlist('ratings')
+        ratings_for_books = list(dict(request.form).values())
 
-        ensure_matrices_exist()  # This ensures matrices are generated after rating submission
-        
+        if len(ratings_for_books) != len(books_to_rate):
+            return render_template('rate_books.html', books=current_books, error="Please rate all the books.")
+
+        ensure_matrices_exist()
+
+        ratings_df = pd.read_csv('data/Ratings.csv')
+        new_ratings = []
+
+        for i, isbn in enumerate(books_to_rate):
+            rating = int(ratings_for_books[i])
+            new_ratings.append({
+                'User-ID': user_id,
+                'ISBN': isbn,
+                'Book-Rating': rating
+            })
+
+        new_ratings_df = pd.DataFrame(new_ratings)
+        ratings_df = pd.concat([ratings_df, new_ratings_df], ignore_index=True)
+        ratings_df.to_csv('data/Ratings.csv', index=False)
+
         return redirect(url_for('recommendations', user_id=user_id))
 
     return render_template('rate_books.html', books=current_books)
@@ -160,11 +165,6 @@ def search_books():
 
 # RECOMMENDATION PART
 
-def scale_scores(scores, scale_to=10):
-    max_score = scores.max()
-    if max_score > 0:
-        return (scores / max_score) * scale_to
-    return scores
 
 # User-based recommendations
 def get_user_based_recommendations(user_id, n=10):
@@ -176,7 +176,7 @@ def get_user_based_recommendations(user_id, n=10):
 
 # Content-based recommendations
 def get_content_based_recommendations(user_id, n=10):
-    recommended_items = get_content_based_recommendations_by_user(user_id, df_ratings, n)
+    recommended_items = get_content_based_recommendations_by_user(user_id, n)
     return pd.DataFrame({
         'ISBN': recommended_items.index,
         'content_score': recommended_items.values
@@ -191,19 +191,39 @@ def get_nlp_recommendations(user_id):
     })
 
 def combine_recommendations(user_id, user_weight=0.3, content_weight=0.35, nlp_weight=0.35, n=10):
+    path = 'data/'
 
-    
-    user_based_recs = get_user_based_recommendations(user_id, n)
+    # Read the dataframes inside the function
+    df_books = pd.read_csv(path + 'filtered_books.csv')
+    df_ratings = pd.read_csv(path + 'Ratings.csv')
+    df_users = pd.read_csv(path + 'Users.csv')
 
-    content_based_recs = get_content_based_recommendations(user_id, n)
-    print("333333333333333333333333333333333333333333333333333333333333333333333333333333333333333")
-    nlp_based_recs = get_nlp_recommendations(user_id)
-    print("444444444444444444444444444444444444444444444444444444444444444444444444444444444444444")
+    # Recompute user similarity
+    user_similarity_df, user_item_matrix, users, books = recompute_user_similarity(df_ratings)
+
+    # Get user-based recommendations
+    user_based_recs = get_user_based_recommendations_by_user(user_id, n, user_similarity_df, user_item_matrix, users, books)
+
+    # Get content-based recommendations
+    content_based_recs = pd.Series() #get_content_based_recommendations_by_user(user_id, df_books, df_ratings, df_users, n)
+
+    # Get NLP-based recommendations
+    nlp_based_recs = pd.Series() #get_nlp_recommendations_by_user_program(user_id, df_books, df_ratings, n)
+
+    # Convert recommendation results to dataframes
+    user_based_recs = pd.DataFrame(user_based_recs).reset_index()
+    user_based_recs.columns = ['ISBN', 'user_score']
+
+    content_based_recs = pd.DataFrame(content_based_recs).reset_index()
+    content_based_recs.columns = ['ISBN', 'content_score']
+
+    nlp_based_recs = pd.DataFrame(nlp_based_recs).reset_index()
+    nlp_based_recs.columns = ['ISBN', 'nlp_score']
 
     # Scale the scores
-    user_based_recs['user_score'] = scale_scores(user_based_recs['user_score'])
-    content_based_recs['content_score'] = scale_scores(content_based_recs['content_score'])
-    nlp_based_recs['nlp_score'] = scale_scores(nlp_based_recs['nlp_score'])
+    # user_based_recs['user_score'] = scale_scores(user_based_recs['user_score'])
+    # content_based_recs['content_score'] = scale_scores(content_based_recs['content_score'])
+    # nlp_based_recs['nlp_score'] = scale_scores(nlp_based_recs['nlp_score'])
 
     # Merge the recommendations
     combined = pd.merge(user_based_recs, content_based_recs, on='ISBN', how='outer')
@@ -215,44 +235,68 @@ def combine_recommendations(user_id, user_weight=0.3, content_weight=0.35, nlp_w
     combined['nlp_score'] = combined['nlp_score'].fillna(0)
 
     # Calculate hybrid score
-    combined['hybrid_score'] = (user_weight * combined['user_score'] +
-                                 content_weight * combined['content_score'] +
-                                 nlp_weight * combined['nlp_score'])
+    # combined['hybrid_score'] = (user_weight * combined['user_score'] +
+    #                              content_weight * combined['content_score'] +
+    #                              nlp_weight * combined['nlp_score'])
 
     # Sort by hybrid score
-    combined = combined.sort_values(by='hybrid_score', ascending=False)
+    combined = combined.sort_values(by='user_score', ascending=False)
 
-    return combined.head(10)
+    # Return top N recommendations
+    return combined.head(n)
 
 @app.route('/recommendations/<user_id>', methods=['GET'])
 def recommendations(user_id):
     # Load only the necessary columns from merged_books.csv
     columns_needed = [
-        'ISBN', 'Book-Title', 'Book-Author', 'Image-URL-S',
-        'pages', 'genres', 'description', 'price'
+        'ISBN', 'Book-Title', 'Book-Author', 'Image-URL-S', 'description', 'price', 'pages','genres'
     ]
-    merged_books = pd.read_csv('data/merged_books.csv', usecols=columns_needed, dtype=dtype)
-    users_df = pd.read_csv('data/Users.csv')
 
-    #user_details = users_df[users_df['User-ID'] == int(float(user_id))  ]
+    cl =  ['ISBN', 'Book-Title', 'Book-Author', 'Image-URL-S']
+    books = pd.read_csv('data/filtered_books.csv', usecols=cl, dtype=dtype)
+    users_df = pd.read_csv('data/Users.csv')
     # Combine recommendations from the three methods
-    recommendations = combine_recommendations(user_id)
+    recommendations = combine_recommendations(user_id, ratings)
 
     # Merge the combined recommendations with the merged_books data to get full book details
     recommended_books = []
     for isbn in recommendations['ISBN']:
-        book = merged_books[merged_books['ISBN'] == isbn].iloc[0]
+        if books[books['ISBN'] == isbn].empty:
+            continue
+        book = books[books['ISBN'] == isbn].iloc[0]
+
+        recommended_books.append({
+            'Book-Title': book['Book-Title'],
+            'Book-Author': book['Book-Author'],
+            'Image-URL-S': book['Image-URL-S'],
+            'ISBN': book['ISBN']})
+        """
         recommended_books.append({
             'Book-Title': book['Book-Title'],
             'Book-Author': book['Book-Author'],
             'Image-URL-S': book['Image-URL-S'],
             'ISBN': book['ISBN'],
-            'price': book['price'],
+            'description': book['description'], 
+            'price': book['price'], 
+            'pages': book['pages'],
             'genres': book['genres']
         })
+        """
+    if len(recommended_books) < 10:
+        remaining_books = books[~books['ISBN'].isin([book['ISBN'] for book in recommended_books])]
+        
+        # Check if there are any remaining books to select from
+        if not remaining_books.empty:
+            random_books = remaining_books.sample(n=5)  # Randomly select 5 books
+            for _, row in random_books.iterrows():
+                recommended_books.append({
+                    'Book-Title': row['Book-Title'],
+                    'Book-Author': row['Book-Author'],
+                    'Image-URL-S': row['Image-URL-S'],
+                    'ISBN': row['ISBN']})
 
-    # Return the recommendations to the recommendations page
     return render_template('recommendations.html', books=recommended_books)
 
 if __name__ == '__main__':
     app.run(debug=True)
+import pandas as pd
