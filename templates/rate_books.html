@@ -103,7 +103,7 @@
                     {% for i in range(1, 6) %}
                     <button type="button" class="star-{{ i }}" onclick="selectRating(this, '{{ book['ISBN'] }}', '{{ i }}')">{{ i }}</button>
                     {% endfor %}
-                    <input type="hidden" name="ratings_{{ book['ISBN'] }}" id="rating-{{ book['ISBN'] }}" required>
+                    <input type="hidden" name="{{ book['ISBN'] }}" id="rating-{{ book['ISBN'] }}" required>
                 </div>
             </li>
             {% endfor %}
